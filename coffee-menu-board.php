@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: Coffee Menu Board
- * Description: Admin-manageable coffee menu board with responsive flip-board styling. Use shortcode: [coffee_menu_board title="Coffee Menu" badge_text="Best Seller!"]
- * Version:     1.0.0
+ * Description: Admin-manageable coffee menu board with categories as columns (up to 4). Use shortcode: [coffee_menu_board title="Menu" categories="coffee|pastries" columns="auto" include_uncategorized="0"]
+ * Version:     1.1.0
  * Author:      Your Name
  * License:     GPL-2.0+
  * Text Domain: coffee-menu-board
@@ -11,12 +11,14 @@
 if ( ! defined( 'ABSPATH' ) ) exit;
 
 class Coffee_Menu_Board_Plugin {
-    const CPT = 'cmb_item';
-    const META_PRICE = '_cmb_price';
-    const META_BEST  = '_cmb_best_seller';
+    const CPT         = 'cmb_item';
+    const TAX         = 'cmb_category';
+    const META_PRICE  = '_cmb_price';
+    const META_BEST   = '_cmb_best_seller';
 
     public function __construct() {
         add_action( 'init', [ $this, 'register_cpt' ] );
+        add_action( 'init', [ $this, 'register_tax' ] );
         add_action( 'add_meta_boxes', [ $this, 'add_meta_boxes' ] );
         add_action( 'save_post', [ $this, 'save_meta' ] );
         add_filter( 'manage_edit-' . self::CPT . '_columns', [ $this, 'admin_columns' ] );
@@ -25,6 +27,7 @@ class Coffee_Menu_Board_Plugin {
         add_action( 'pre_get_posts', [ $this, 'admin_orderby' ] );
 
         add_shortcode( 'coffee_menu_board', [ $this, 'shortcode' ] );
+
         add_action( 'wp_enqueue_scripts', [ $this, 'register_assets' ] );
 
         register_activation_hook( __FILE__, [ $this, 'activate' ] );
@@ -32,7 +35,16 @@ class Coffee_Menu_Board_Plugin {
 
     public function activate() {
         $this->register_cpt();
+        $this->register_tax();
         flush_rewrite_rules();
+
+        // Create a couple default categories the first time for convenience.
+        if ( ! term_exists( 'Coffee', self::TAX ) ) {
+            wp_insert_term( 'Coffee', self::TAX, [ 'slug' => 'coffee' ] );
+        }
+        if ( ! term_exists( 'Pastries', self::TAX ) ) {
+            wp_insert_term( 'Pastries', self::TAX, [ 'slug' => 'pastries' ] );
+        }
     }
 
     public function register_cpt() {
@@ -59,6 +71,33 @@ class Coffee_Menu_Board_Plugin {
             'capability_type' => 'post',
             'map_meta_cap'  => true,
         ] );
+    }
+
+    public function register_tax() {
+        $labels = [
+            'name'          => __('Menu Categories','coffee-menu-board'),
+            'singular_name' => __('Menu Category','coffee-menu-board'),
+            'search_items'  => __('Search Menu Categories','coffee-menu-board'),
+            'all_items'     => __('All Menu Categories','coffee-menu-board'),
+            'edit_item'     => __('Edit Menu Category','coffee-menu-board'),
+            'update_item'   => __('Update Menu Category','coffee-menu-board'),
+            'add_new_item'  => __('Add New Menu Category','coffee-menu-board'),
+            'new_item_name' => __('New Menu Category Name','coffee-menu-board'),
+            'menu_name'     => __('Menu Categories','coffee-menu-board'),
+        ];
+        register_taxonomy(
+            self::TAX,
+            [ self::CPT ],
+            [
+                'hierarchical'      => true,
+                'labels'            => $labels,
+                'show_ui'           => true,
+                'show_admin_column' => true,
+                'query_var'         => true,
+                'rewrite'           => false,
+                'show_in_quick_edit'=> true,
+            ]
+        );
     }
 
     public function add_meta_boxes() {
@@ -88,7 +127,7 @@ class Coffee_Menu_Board_Plugin {
                 <?php _e('Mark as Best Seller','coffee-menu-board'); ?>
             </label>
         </p>
-        <p class="description"><?php _e('Use “Order” box in the right sidebar to set display order (lower number appears first).','coffee-menu-board'); ?></p>
+        <p class="description"><?php _e('Tip: Assign a Menu Category on the right. Use the “Order” field to set the item’s position within its category (lower appears first).','coffee-menu-board'); ?></p>
         <?php
     }
 
@@ -109,6 +148,7 @@ class Coffee_Menu_Board_Plugin {
         $new = [];
         $new['cb'] = $cols['cb'];
         $new['title'] = __('Item','coffee-menu-board');
+        $new[self::TAX] = __('Category','coffee-menu-board');
         $new['cmb_price'] = __('Price','coffee-menu-board');
         $new['cmb_best']  = __('Best Seller','coffee-menu-board');
         $new['menu_order'] = __('Order','coffee-menu-board');
@@ -126,10 +166,7 @@ class Coffee_Menu_Board_Plugin {
             echo intval( $post->menu_order );
         }
     }
-    public function sortable_columns( $cols ) {
-        $cols['menu_order'] = 'menu_order';
-        return $cols;
-    }
+    public function sortable_columns( $cols ) { $cols['menu_order'] = 'menu_order'; return $cols; }
     public function admin_orderby( $q ) {
         if ( is_admin() && $q->is_main_query() && $q->get('post_type') === self::CPT && ! $q->get('orderby') ) {
             $q->set('orderby','menu_order title');
@@ -140,77 +177,56 @@ class Coffee_Menu_Board_Plugin {
     /* Assets */
     public function register_assets() {
         $handle = 'cmb-frontend';
-        wp_register_style( $handle, false, [], '1.0' );
+        wp_register_style( $handle, false, [], '1.1' );
         wp_add_inline_style( $handle, $this->frontend_css() );
-        // Enqueue only when shortcode is present via wp_enqueue_scripts hook from shortcode handler (fallback here to allow forced enqueue)
     }
 
     private function frontend_css() {
         return <<<CSS
 :root{
-  --board-bg:#111;
-  --board-edge:#151515;
-  --line:#2c2c2c;
-  --text:#ffcc40;
-  --muted:#ffcc40;
-  --accent:#ff5333;
-  --shadow:0 10px 24px rgba(0,0,0,.45);
-  --radius:10px;
-  --row-font:clamp(14px, 3.8vw, 18px);
-  --title-font:clamp(14px, 4.2vw, 18px);
+  --board-bg:#111; --board-edge:#151515; --line:#2c2c2c;
+  --text:#f5f5f5; --muted:#cfcfcf; --accent:#ff5333;
+  --shadow:0 10px 24px rgba(0,0,0,.45); --radius:10px;
+  --row-font:clamp(14px, 3.8vw, 18px); --title-font:clamp(14px, 4.2vw, 18px);
   --row-pad-y:12px;
 }
 .cmb-wrap{display:grid;place-items:center}
 .cmb-board{
-  position:relative;
-  /* width:min(92vw,560px); */
-  width:100%;
+  position:relative; width:min(96vw,1200px);
   background:linear-gradient(#101010,#0d0d0d);
-  border:1px solid var(--board-edge);
-  border-radius:var(--radius);
-  padding:18px 18px 24px;
-  box-shadow:var(--shadow);
-  color:var(--text);
+  border:1px solid var(--board-edge); border-radius:var(--radius);
+  padding:18px; box-shadow:var(--shadow); color:var(--text);
   font-family:"Courier New",ui-monospace,Menlo,Consolas,monospace;
 }
-.cmb-title{
-  margin:0 0 8px;
-  text-align:center;
-  letter-spacing:.12em;
-  color:#e9e9e9;
-  font-size:var(--title-font);
-  text-transform:uppercase;
-}
-.cmb-table{
-  width:100%;
-  border-collapse:collapse;
-  text-transform:uppercase;
-  font-size:var(--row-font);
-  font-variant-numeric:tabular-nums;
-}
+.cmb-title{margin:0 0 12px;text-align:center;letter-spacing:.12em;color:#e9e9e9;font-size:var(--title-font);text-transform:uppercase;}
+/* Column grid */
+.cmb-grid{display:grid; gap:18px}
+.cmb-col{background:#0f0f0f; border:1px solid #1a1a1a; border-radius:8px; padding:14px;}
+.cmb-col h3{margin:0 0 8px; font-size:clamp(14px,3.6vw,16px); letter-spacing:.12em; text-transform:uppercase; color:#e9e9e9; text-align:center;}
+/* Table in each column */
+.cmb-table{width:100%; border-collapse:collapse; text-transform:uppercase; font-size:var(--row-font); font-variant-numeric:tabular-nums;}
 .cmb-sr{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}
-.cmb-table tbody tr{
-  display:grid;
-  grid-template-columns:1fr auto;
-  align-items:center;
-  gap:14px;
-  padding: var(--row-pad-y) 2px;
-  border-bottom:1px solid var(--line);
-}
+.cmb-table tbody tr{display:grid; grid-template-columns:1fr auto; align-items:center; gap:14px; padding: var(--row-pad-y) 2px; border-bottom:1px solid var(--line);}
 .cmb-table td:first-child{letter-spacing:.12em}
-.cmb-table td:last-child{justify-self:end;color:var(--muted)}
-.cmb-best td{color:#ffd27a;font-weight:700}
-.cmb-badge{
-  position:absolute; right:-18px; top:-18px;
-  width:92px;height:92px;background:var(--accent);color:#fff;border-radius:50%;
-  display:grid;place-items:center;font-weight:700;text-align:center;line-height:1.05;padding:10px;
-  transform:rotate(10deg); box-shadow:0 10px 18px rgba(0,0,0,.32);
-}
+.cmb-table td:last-child{justify-self:end; color:var(--muted)}
+.cmb-best td{color:#ffd27a; font-weight:700}
+.cmb-badge{position:absolute; right:-18px; top:-18px; width:92px;height:92px;background:var(--accent);color:#fff;border-radius:50%; display:grid;place-items:center;font-weight:700;text-align:center;line-height:1.05;padding:10px; transform:rotate(10deg); box-shadow:0 10px 18px rgba(0,0,0,.32);}
 @media (max-width:520px){
-  .cmb-board{padding:14px 14px 18px}
-  .cmb-table tbody tr{grid-template-columns:1fr;gap:6px}
-  .cmb-table td:last-child{justify-self:start;opacity:.9}
-  .cmb-badge{right:8px;top:8px;width:74px;height:74px;font-size:12px;transform:rotate(8deg)}
+  .cmb-board{padding:14px}
+  .cmb-table tbody tr{grid-template-columns:1fr; gap:6px}
+  .cmb-table td:last-child{justify-self:start; opacity:.9}
+  .cmb-badge{right:8px; top:8px; width:74px; height:74px; font-size:12px; transform:rotate(8deg)}
+}
+/* Responsive columns: up to 4 */
+.cmb-grid.cols-1{grid-template-columns:1fr}
+.cmb-grid.cols-2{grid-template-columns:repeat(2, minmax(0,1fr))}
+.cmb-grid.cols-3{grid-template-columns:repeat(3, minmax(0,1fr))}
+.cmb-grid.cols-4{grid-template-columns:repeat(4, minmax(0,1fr))}
+@media (max-width:900px){
+  .cmb-grid.cols-4{grid-template-columns:repeat(2, minmax(0,1fr))}
+}
+@media (max-width:640px){
+  .cmb-grid.cols-3, .cmb-grid.cols-2, .cmb-grid.cols-4{grid-template-columns:1fr}
 }
 CSS;
     }
@@ -218,24 +234,37 @@ CSS;
     /* Shortcode */
     public function shortcode( $atts ) {
         $atts = shortcode_atts( [
-            'title'      => 'Coffee Menu',
-            'badge_text' => 'Best Seller!',
-            'show_badge' => '1',
-            'class'      => '',
-            'category'   => '', // optional future taxonomy
+            'title'               => 'Menu',
+            'badge_text'          => 'Best Seller!',
+            'show_badge'          => '1',
+            'class'               => '',
+            'categories'          => '',   // pipe-delimited slugs in display order, e.g. "coffee|pastries|tea"
+            'columns'             => 'auto', // 1-4 or auto (matches number of categories, capped at 4)
+            'include_uncategorized' => '0', // also show items with no category as a column "Other"
         ], $atts, 'coffee_menu_board' );
 
-        // Query items (ordered by menu_order then title)
-        $args = [
-            'post_type'      => self::CPT,
-            'posts_per_page' => -1,
-            'orderby'        => ['menu_order' => 'ASC', 'title' => 'ASC'],
-            'order'          => 'ASC',
-            'post_status'    => 'publish',
-        ];
-        $items = get_posts( $args );
+        // Determine which categories to show (and order)
+        $terms_to_show = [];
+        if ( $atts['categories'] !== '' ) {
+            $slugs = array_filter( array_map( 'sanitize_title', explode('|', $atts['categories']) ) );
+            if ( $slugs ) {
+                $terms = get_terms([ 'taxonomy'=> self::TAX, 'hide_empty'=> false, 'slug'=> $slugs ]);
+                // Reorder to match input slugs
+                foreach ( $slugs as $slug ) {
+                    foreach ( $terms as $t ) if ( $t->slug === $slug ) $terms_to_show[] = $t;
+                }
+            }
+        } else {
+            // Default: show all top-level categories sorted by name
+            $terms_to_show = get_terms([ 'taxonomy'=> self::TAX, 'hide_empty'=> false, 'parent' => 0, 'orderby'=>'name', 'order'=>'ASC' ]);
+        }
 
-        // Enqueue styles now that the shortcode is used
+        // Cap columns to 4
+        $columns = $atts['columns'] === 'auto'
+            ? min( max( count($terms_to_show), 1 ), 4 )
+            : min( max( intval($atts['columns']), 1 ), 4 );
+
+        // Enqueue styles
         wp_enqueue_style( 'cmb-frontend' );
 
         ob_start(); ?>
@@ -243,29 +272,28 @@ CSS;
           <div class="cmb-board" role="region" aria-label="<?php echo esc_attr( $atts['title'] ); ?>">
             <h2 class="cmb-title"><?php echo esc_html( $atts['title'] ); ?></h2>
 
-            <table class="cmb-table" aria-describedby="cmb-desc-<?php echo esc_attr( wp_unique_id('') ); ?>">
-              <caption id="cmb-desc-<?php echo esc_attr( wp_unique_id('') ); ?>" class="cmb-sr"><?php echo esc_html( $atts['title'] ); ?></caption>
-              <thead class="cmb-sr">
-                <tr>
-                  <th scope="col"><?php esc_html_e( 'Drink', 'coffee-menu-board' ); ?></th>
-                  <th scope="col"><?php esc_html_e( 'Price', 'coffee-menu-board' ); ?></th>
-                </tr>
-              </thead>
-              <tbody>
-              <?php foreach ( $items as $item ) :
-                  $price = get_post_meta( $item->ID, self::META_PRICE, true );
-                  $best  = get_post_meta( $item->ID, self::META_BEST, true );
-                  $classes = $best ? 'cmb-best' : '';
-              ?>
-                <tr class="<?php echo esc_attr( $classes ); ?>">
-                  <td><?php echo esc_html( get_the_title( $item ) ); ?></td>
-                  <td><?php echo $price !== '' ? esc_html( $this->format_price( $price ) ) : '&nbsp;'; ?></td>
-                </tr>
-              <?php endforeach; ?>
-              </tbody>
-            </table>
+            <div class="cmb-grid <?php echo 'cols-' . esc_attr( $columns ); ?>">
+              <?php
+              $any_best = false;
+              // Render a column for each chosen category
+              foreach ( array_slice($terms_to_show, 0, 4) as $term ) {
+                  $items = $this->get_items_for_term( $term->term_id );
+                  $any_best = $any_best || $this->has_best_seller($items);
+                  echo $this->render_column( $term->name, $items );
+              }
 
-            <?php if ( $this->has_best_seller( $items ) && $atts['show_badge'] === '1' ) : ?>
+              // Optional: uncategorized items as a column
+              if ( $atts['include_uncategorized'] === '1' ) {
+                  $uncat_items = $this->get_items_no_term();
+                  if ( $uncat_items ) {
+                      $any_best = $any_best || $this->has_best_seller($uncat_items);
+                      echo $this->render_column( __('Other','coffee-menu-board'), $uncat_items );
+                  }
+              }
+              ?>
+            </div>
+
+            <?php if ( $any_best && $atts['show_badge'] === '1' ) : ?>
               <div class="cmb-badge" aria-label="<?php echo esc_attr( $atts['badge_text'] ); ?>">
                 <?php echo esc_html( $atts['badge_text'] ); ?>
               </div>
@@ -276,6 +304,68 @@ CSS;
         return ob_get_clean();
     }
 
+    private function render_column( $heading, $items ) {
+        ob_start(); ?>
+        <div class="cmb-col">
+          <h3><?php echo esc_html( $heading ); ?></h3>
+          <table class="cmb-table">
+            <thead class="cmb-sr">
+              <tr>
+                <th scope="col"><?php esc_html_e( 'Item', 'coffee-menu-board' ); ?></th>
+                <th scope="col"><?php esc_html_e( 'Price', 'coffee-menu-board' ); ?></th>
+              </tr>
+            </thead>
+            <tbody>
+              <?php if ( $items ) :
+                  foreach ( $items as $item ) :
+                      $price = get_post_meta( $item->ID, self::META_PRICE, true );
+                      $best  = get_post_meta( $item->ID, self::META_BEST, true );
+                      $classes = $best ? 'cmb-best' : '';
+              ?>
+                <tr class="<?php echo esc_attr( $classes ); ?>">
+                  <td><?php echo esc_html( get_the_title( $item ) ); ?></td>
+                  <td><?php echo $price !== '' ? esc_html( $this->format_price( $price ) ) : '&nbsp;'; ?></td>
+                </tr>
+              <?php endforeach; else : ?>
+                <tr><td colspan="2"><?php esc_html_e('No items yet.','coffee-menu-board'); ?></td></tr>
+              <?php endif; ?>
+            </tbody>
+          </table>
+        </div>
+        <?php
+        return ob_get_clean();
+    }
+
+    private function get_items_for_term( $term_id ) {
+        return get_posts([
+            'post_type'      => self::CPT,
+            'posts_per_page' => -1,
+            'orderby'        => ['menu_order' => 'ASC', 'title' => 'ASC'],
+            'order'          => 'ASC',
+            'post_status'    => 'publish',
+            'tax_query'      => [[
+                'taxonomy' => self::TAX,
+                'field'    => 'term_id',
+                'terms'    => $term_id,
+            ]],
+        ]);
+    }
+
+    private function get_items_no_term() {
+        // Items with no category assigned
+        return get_posts([
+            'post_type'      => self::CPT,
+            'posts_per_page' => -1,
+            'orderby'        => ['menu_order' => 'ASC', 'title' => 'ASC'],
+            'order'          => 'ASC',
+            'post_status'    => 'publish',
+            'tax_query'      => [[
+                'taxonomy' => self::TAX,
+                'operator' => 'NOT EXISTS',
+            ]],
+        ]);
+    }
+
     private function has_best_seller( $items ) {
         foreach ( $items as $item ) {
             if ( get_post_meta( $item->ID, self::META_BEST, true ) ) return true;
@@ -284,10 +374,8 @@ CSS;
     }
 
     private function format_price( $raw ) {
-        // Accept 2.3 -> 2.30; 3 -> 3.00, no currency symbol stored in DB
         $num = floatval( $raw );
         $formatted = number_format( $num, 2, '.', '' );
-        // Use site currency symbol if WooCommerce exists; else default $
         $symbol = function_exists('get_woocommerce_currency_symbol') ? get_woocommerce_currency_symbol() : '$';
         return $symbol . $formatted;
     }
